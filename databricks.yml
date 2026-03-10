@@ -1,0 +1,76 @@
+# databricks.yml
+# Defines the full 3-task sales pipeline as a Databricks Asset Bundle
+# Usage:
+#   databricks bundle validate
+#   databricks bundle deploy -t dev
+#   databricks bundle run sales_pipeline
+
+bundle:
+  name: lakeflow_jobs_series
+
+workspace:
+  host: https://your-workspace.azuredatabricks.net
+
+resources:
+  jobs:
+    sales_pipeline:
+      name: Sales Pipeline (DAB Managed)
+      description: Bronze to Gold sales pipeline — managed via Databricks Asset Bundle
+
+      parameters:
+        - name: run_date
+          default: "{{job.start_time.iso_date}}"
+        - name: run_id
+          default: "{{job.run_id}}"
+
+      schedule:
+        quartz_cron_expression: "0 6 * * *"
+        timezone_id: UTC
+        pause_status: UNPAUSED
+
+      email_notifications:
+        on_failure:
+          - your-email@domain.com
+
+      job_clusters:
+        - job_cluster_key: main_cluster
+          new_cluster:
+            spark_version: 15.4.x-scala2.12
+            node_type_id: Standard_DS3_v2
+            num_workers: 2
+            data_security_mode: SINGLE_USER
+
+      tasks:
+        - task_key: ingest_bronze
+          description: Ingest raw sales data to Bronze Delta table
+          notebook_task:
+            notebook_path: ./lakeflow_jobs_series/01_Lakeflow_Jobs_Presentation_Guide
+            base_parameters:
+              run_date: "{{job.parameters.run_date}}"
+              run_id: "{{job.parameters.run_id}}"
+          job_cluster_key: main_cluster
+          max_retries: 2
+          min_retry_interval_millis: 300000
+
+        - task_key: transform_silver
+          description: Clean and transform Bronze to Silver
+          depends_on:
+            - task_key: ingest_bronze
+          notebook_task:
+            notebook_path: ./lakeflow_jobs_series/02_Dynamic_Value_References
+            base_parameters:
+              record_count: "{{tasks.ingest_bronze.values.record_count}}"
+              run_date: "{{tasks.ingest_bronze.values.run_date}}"
+          job_cluster_key: main_cluster
+
+        - task_key: build_gold
+          description: Aggregate Silver to Gold for dashboards
+          depends_on:
+            - task_key: transform_silver
+          notebook_task:
+            notebook_path: ./lakeflow_jobs_series/03_Task_Values
+            base_parameters:
+              pass_rate: "{{tasks.transform_silver.values.pass_rate}}"
+              at_risk_count: "{{tasks.transform_silver.values.at_risk_count}}"
+              run_date: "{{tasks.transform_silver.values.run_date}}"
+          job_cluster_key: main_cluster
